@@ -1,4 +1,3 @@
-#pragma once
 /*
 Copyright © 2020 Siyao Wang
 
@@ -22,13 +21,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 */
+#pragma once
 
-#include <iostream>
 #include <initializer_list>
-#include <algorithm>
-#include <type_traits>
 #include <memory>
-#include <new>
+
+//#include <algorithm>
 
 namespace wsy {
 
@@ -42,6 +40,8 @@ namespace wsy {
 		using const_iterator = const value_type*;
 		using reference = value_type & ;
 		using const_reference = const value_type&;
+		using rvalue_reference = value_type && ;
+
 		using size_type = std::size_t;
 
 		vector()
@@ -190,7 +190,7 @@ namespace wsy {
 			}
 		}
 
-		void pop() {
+		void pop_back() {
 			if (empty()) return;
 			else if (2 * size() <= capacity()) {
 				//shrink _cend to be half
@@ -207,6 +207,35 @@ namespace wsy {
 			}
 		}
 
+		void pop_front() {
+			if (empty()) return;
+			if (size() > capacity() / 2) {
+				auto it = begin();
+				while (it + 1 != end()) {
+					*it = *(it + 1);
+					++it;
+				}
+				alloc.destroy(it);
+				--_end;
+			}
+			else {
+				//auto it = begin();
+				//while (it + 1 != end()) {
+				//	*it = *(it + 1);
+				//	++it;
+				//}
+				//alloc.destroy(it);
+				//_end = it;
+				//alloc.deallocate(it, size_type(_M_getStorage() - end())); // <-- will not work
+				//_cend = _end;
+
+				auto tmp_begin = alloc.allocate(size() - 1);
+				auto tmp_end = std::uninitialized_copy(begin() + 1, end(), tmp_begin);
+				auto tmp_cend = tmp_begin + size() - 1;
+				_M_alloc_refresh(tmp_begin, tmp_end, tmp_cend);
+			}
+		}
+
 		iterator begin() { return _begin; }
 		const_iterator begin() const { return _begin; }
 		iterator end() { return _end; }
@@ -218,10 +247,13 @@ namespace wsy {
 		const_reference back() const { return *(end() - 1); }
 
 		iterator erase(iterator pos) {
-			if (pos + 1 != end())
-				std::copy(pos + 1, _end, pos);
+			auto it = pos;
+			while (it + 1 != end()) {
+				*it = *(it + 1);
+				++it;
+			}
+			alloc.destroy(it);
 			--_end;
-			alloc.destroy(_end);
 			return pos;
 		}
 		iterator erase(iterator it_begin, iterator it_end) {
@@ -231,8 +263,7 @@ namespace wsy {
 			return it_begin;
 		}
 		iterator insert(iterator pos, const_reference val) {
-			//TODO bound checking
-			//...
+			if (pos > end() || pos < begin()) throw std::runtime_error("index out of bound");
 
 			size_type offset = size_type(pos - begin()) - 1;
 			if (pos == end()) {
@@ -386,7 +417,7 @@ namespace wsy {
 	};
 
 	template <typename T>
-	const vector<T> operator+(const vector<T> & v1, const vector<T> & v2)
+	inline const vector<T> operator+(const vector<T> & v1, const vector<T> & v2)
 	{
 		vector<T> res(v1);
 		res += v2;
@@ -394,10 +425,20 @@ namespace wsy {
 	}
 
 	template <typename T>
+	inline bool operator==(const vector<T> & v1, const vector<T> & v2)
+	{
+		if (v1.size() != v2.size()) return false;
+		for (auto it1 = v1.begin(), it2 = v2.begin(); it1 != v1.end() && it2 != v2.end(); ++it1, ++it2) {
+			if (*it1 != *it2) return false;
+		}
+		return true;
+	}
+
+	/*template <typename T>
 	std::ostream& operator<<(std::ostream& os, const vector<T>& v) {
 		for (std::size_t i = 0; i < v.size(); ++i) {
 			os << v.at(i) << " ";
 		}
 		return os;
-	}
+	}*/
 }
