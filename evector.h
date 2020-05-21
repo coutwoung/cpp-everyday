@@ -44,8 +44,9 @@ namespace wsy
 		using const_iterator = const value_type*;
 		using reference = value_type & ;
 		using const_reference = const value_type&;
+#if __cplusplus >=201103L
 		using rvalue_reference = value_type && ;
-
+#endif
 		using size_type = std::size_t;
 
 		vector()
@@ -79,6 +80,7 @@ namespace wsy
 			_M_end_of_storage{ _M_begin + v.size() }
 		{ }
 
+#if __cplusplus >= 201103L
 		vector(vector&& v) noexcept //move constructor remains _M_end_of_storage and _csize
 			: _M_begin{ v._M_begin }, _M_end{ v._M_end }, _M_end_of_storage{ v._M_end_of_storage }
 		{
@@ -88,6 +90,7 @@ namespace wsy
 			v._M_end = v.begin() + 1;
 			v._M_end_of_storage = v.end();
 		}
+#endif
 
 		vector& operator=(const vector& v)
 		{
@@ -96,6 +99,7 @@ namespace wsy
 			return *this; //tmp will automatically destroied here
 		}
 
+#if __cplusplus >= 201103L
 		vector& operator=(vector&& v)
 		{ //remain _M_end_of_storage and _csize
 			_M_alloc_refresh(v.begin(), v.end(), v._M_getStorage());
@@ -105,6 +109,7 @@ namespace wsy
 			v._M_end_of_storage = v.end();
 			return *this;
 		}
+#endif
 
 		vector& operator+=(const vector& v)
 		{ // do not remain _M_end_of_storage and _csize
@@ -137,8 +142,13 @@ namespace wsy
 
 		void swap(vector& v) {
 			vector tmp(v);
+#if __cplusplus >= 201103L
 			v = std::move(*this);
 			*this = std::move(tmp);
+#else
+			v = *this;
+			*this = tmp;
+#endif
 		}
 
 		void assign(size_type size, const_reference val) { _M_realloc_fill(size, val); }
@@ -147,6 +157,47 @@ namespace wsy
 
 #if __cplusplus >= 201103L
 		void assign(std::initializer_list<value_type> lst) { _M_realloc_copy(lst.begin(), lst.end()); }
+
+		void emplace(const_iterator pos, rvalue_reference val) {
+			if (pos > end() || pos < begin()) throw std::runtime_error("index out of bound");
+
+			size_type offset = size_type(pos - begin()) - 1;
+			if (pos == end())
+				emplace_back(std::move(val));
+			else if (pos == begin())
+				push_front(std::move(val));
+			else
+			{
+				value_type prev = *--pos;
+				*pos = std::move(val);
+				while (pos != _M_end)
+					std::swap(*pos++, prev);
+				push_back(std::move(prev));
+			}
+			return begin() + offset;
+		}
+		void emplace_back(rvalue_reference val) {
+			if (empty()) {
+				_M_begin = _M_allocator.allocate(1);
+				_M_allocator.construct(_M_begin, val);
+				_M_end = _M_begin + 1;
+				_M_end_of_storage = _M_end;
+			}
+			else if (_M_end == _M_end_of_storage) {
+				//expand _M_end_of_storage to be double
+				//expand _M_end by 1
+
+				auto tmp_begin = _M_allocator.allocate(2 * size());
+				auto tmp_end = std::uninitialized_copy(begin(), end(), tmp_begin);
+				_M_allocator.construct(tmp_end++, std::move(val));
+				auto tmp_cend = tmp_begin + 2 * size();
+
+				_M_alloc_refresh(tmp_begin, tmp_end, tmp_cend);
+			}
+			else {
+				_M_allocator.construct(_M_end++, val);
+			}
+		}
 #endif
 
 		void push_back(const_reference val)
@@ -206,6 +257,42 @@ namespace wsy
 			}
 		}
 
+#if __cplusplus >= 201103L
+		void push_back(rvalue_reference val) {
+			emplace_back(std::move(val));
+		}
+		void push_front(rvalue_reference val) {
+			if (empty())
+			{
+				_M_begin = _M_allocator.allocate(1);
+				_M_allocator.construct(_M_begin, std::move(val));
+				_M_end = _M_begin + 1;
+				_M_end_of_storage = _M_end;
+			}
+			else if (_M_end == _M_end_of_storage)
+			{
+				//expand _M_end_of_storage to be double
+				//expand _M_end by 1
+
+				auto tmp_begin = _M_allocator.allocate(2 * size());
+				auto tmp_end = std::uninitialized_copy(begin(), end(), tmp_begin + 1);
+				_M_allocator.construct(tmp_begin, std::move(val));
+				auto tmp_cend = tmp_begin + 2 * size();
+
+				_M_alloc_refresh(tmp_begin, tmp_end, tmp_cend);
+			}
+			else
+			{
+				_M_allocator.construct(_M_end++, value_type{});
+				value_type prev = *begin();
+				*_M_begin = std::move(val);
+
+				for (auto it = begin() + 1; it != end(); ++it) {
+					std::swap(*it, prev);
+				}
+			}
+		}
+#endif
 		void pop_back() {
 			if (empty()) return;
 			else if (2 * size() <= capacity())
@@ -480,11 +567,11 @@ namespace wsy
 		v1.swap(v2);
 	}
 
-	/*template <typename T>
+	template <typename T>
 	std::ostream& operator<<(std::ostream& os, const vector<T>& v) {
 		for (std::size_t i = 0; i < v.size(); ++i) {
 			os << v.at(i) << " ";
 		}
 		return os;
-	}*/
+	}
 }
