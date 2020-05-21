@@ -27,13 +27,15 @@ THE SOFTWARE.
 #include <initializer_list>
 #endif
 
+#include <iostream>
 #include <memory>
 
 namespace wsy
 {
 
 	template <typename T, class Alloc = std::allocator<T>>
-	class vector {
+	class vector
+	{
 	public:
 		using value_type = T;
 		using pointer = value_type * ;
@@ -47,43 +49,44 @@ namespace wsy
 		using size_type = std::size_t;
 
 		vector()
-			: _begin{ nullptr }, _end{ nullptr }, _cend{ nullptr } 
+			: _M_begin{ nullptr }, _M_end{ nullptr }, _M_end_of_storage{ nullptr }
 		{ }
 
 		vector(size_type size)
-			: _begin{ alloc.allocate(size) },
-			_end{ std::uninitialized_fill_n(_begin, size, T{}) },
-			_cend{ _begin + size }
+			: _M_begin{ _M_allocator.allocate(size) },
+			_M_end{ std::uninitialized_fill_n(_M_begin, size, T{}) },
+			_M_end_of_storage{ _M_begin + size }
 		{ }
 
 		vector(const int& val, size_type size)
-			: _begin{ alloc.allocate(size) },
-			_end{ std::uninitialized_fill_n(_begin, size, val) },
-			_cend{ _begin + size }
+			: _M_begin{ _M_allocator.allocate(size) },
+			_M_end{ std::uninitialized_fill_n(_M_begin, size, val) },
+			_M_end_of_storage{ _M_begin + size }
 		{ }
 
 #if __cplusplus >= 201103L
 		vector(std::initializer_list<value_type> lst)
-			: _begin{ alloc.allocate(lst.size()) },
-			_end{ std::uninitialized_copy(lst.begin(), lst.end(), _begin) },
-			_cend{ _begin + lst.size() }
+			: _M_begin{ _M_allocator.allocate(lst.size()) },
+			_M_end{ std::uninitialized_copy(lst.begin(), lst.end(), _M_begin) },
+			_M_end_of_storage{ _M_begin + lst.size() }
 		{ }
 #endif
 
 
-		vector(const vector& v) // remains _cend and _csize
-			: _begin{ alloc.allocate(v.size()) },
-			_end{ std::uninitialized_copy(v.begin(), v.end(), _begin) },
-			_cend{ _begin + v.size() }
+		vector(const vector& v) // remains _M_end_of_storage and _csize
+			: _M_begin{ _M_allocator.allocate(v.size()) },
+			_M_end{ std::uninitialized_copy(v.begin(), v.end(), _M_begin) },
+			_M_end_of_storage{ _M_begin + v.size() }
 		{ }
 
-		vector(vector&& v) //move constructor remains _cend and _csize
-			: _begin{ v._begin }, _end{ v._end }, _cend{ v._cend }
+		vector(vector&& v) noexcept //move constructor remains _M_end_of_storage and _csize
+			: _M_begin{ v._M_begin }, _M_end{ v._M_end }, _M_end_of_storage{ v._M_end_of_storage }
 		{
 			// must not deallocate v's memory
-			v._begin = nullptr;
-			v._end = nullptr;
-			v._cend = nullptr;
+			v._M_begin = _M_allocator.allocate(1);
+			_M_allocator.construct(v._M_begin, value_type{});
+			v._M_end = v.begin() + 1;
+			v._M_end_of_storage = v.end();
 		}
 
 		vector& operator=(const vector& v)
@@ -94,15 +97,18 @@ namespace wsy
 		}
 
 		vector& operator=(vector&& v)
-		{ //remain _cend and _csize
+		{ //remain _M_end_of_storage and _csize
 			_M_alloc_refresh(v.begin(), v.end(), v._M_getStorage());
-			v._M_dealloc();
+			v._M_begin = _M_allocator.allocate(1);
+			_M_allocator.construct(v._M_begin, value_type{});
+			v._M_end = v.begin() + 1;
+			v._M_end_of_storage = v.end();
 			return *this;
 		}
 
 		vector& operator+=(const vector& v)
-		{ // do not remain _cend and _csize
-			auto tmp_begin = alloc.allocate(size() + v.size());
+		{ // do not remain _M_end_of_storage and _csize
+			auto tmp_begin = _M_allocator.allocate(size() + v.size());
 			auto tmp_end = std::uninitialized_copy(begin(), end(), tmp_begin);
 			tmp_end = std::uninitialized_copy(v.begin(), v.end(), tmp_end);
 			auto tmp_cend = tmp_begin + size() + v.size();
@@ -111,7 +117,7 @@ namespace wsy
 			return *this;
 		}
 
-		const_reference operator[](size_type idx) const { return *(_begin + idx); }
+		const_reference operator[](size_type idx) const { return *(_M_begin + idx); }
 
 		reference operator[](size_type idx)
 		{
@@ -121,12 +127,18 @@ namespace wsy
 		const_reference at(size_type idx) const
 		{
 			if (idx < 0 || idx >= size()) throw std::runtime_error("index out of bound");
-			return *(_begin + idx);
+			return *(_M_begin + idx);
 		}
 
 		reference at(size_type idx)
 		{
 			return const_cast<T&>(static_cast<const vector&>(*this).at(idx));
+		}
+
+		void swap(vector& v) {
+			vector tmp(v);
+			v = std::move(*this);
+			*this = std::move(tmp);
 		}
 
 		void assign(size_type size, const_reference val) { _M_realloc_fill(size, val); }
@@ -140,24 +152,24 @@ namespace wsy
 		void push_back(const_reference val)
 		{
 			if (empty()) {
-				_begin = alloc.allocate(1);
-				alloc.construct(_begin, val);
-				_end = _begin + 1;
-				_cend = _end;
+				_M_begin = _M_allocator.allocate(1);
+				_M_allocator.construct(_M_begin, val);
+				_M_end = _M_begin + 1;
+				_M_end_of_storage = _M_end;
 			}
-			else if (_end == _cend) {
-				//expand _cend to be double
-				//expand _end by 1
+			else if (_M_end == _M_end_of_storage) {
+				//expand _M_end_of_storage to be double
+				//expand _M_end by 1
 
-				auto tmp_begin = alloc.allocate(2 * size());
+				auto tmp_begin = _M_allocator.allocate(2 * size());
 				auto tmp_end = std::uninitialized_copy(begin(), end(), tmp_begin);
-				alloc.construct(tmp_end++, val);
+				_M_allocator.construct(tmp_end++, val);
 				auto tmp_cend = tmp_begin + 2 * size();
 
 				_M_alloc_refresh(tmp_begin, tmp_end, tmp_cend);
 			}
 			else {
-				alloc.construct(_end++, val);
+				_M_allocator.construct(_M_end++, val);
 			}
 		}
 
@@ -165,28 +177,28 @@ namespace wsy
 		{
 			if (empty())
 			{
-				_begin = alloc.allocate(1);
-				alloc.construct(_begin, val);
-				_end = _begin + 1;
-				_cend = _end;
+				_M_begin = _M_allocator.allocate(1);
+				_M_allocator.construct(_M_begin, val);
+				_M_end = _M_begin + 1;
+				_M_end_of_storage = _M_end;
 			}
-			else if (_end == _cend)
+			else if (_M_end == _M_end_of_storage)
 			{
-				//expand _cend to be double
-				//expand _end by 1
+				//expand _M_end_of_storage to be double
+				//expand _M_end by 1
 
-				auto tmp_begin = alloc.allocate(2 * size());
+				auto tmp_begin = _M_allocator.allocate(2 * size());
 				auto tmp_end = std::uninitialized_copy(begin(), end(), tmp_begin + 1);
-				alloc.construct(tmp_begin, val);
+				_M_allocator.construct(tmp_begin, val);
 				auto tmp_cend = tmp_begin + 2 * size();
 
 				_M_alloc_refresh(tmp_begin, tmp_end, tmp_cend);
 			}
 			else
 			{
-				alloc.construct(_end++, value_type{});
+				_M_allocator.construct(_M_end++, value_type{});
 				value_type prev = *begin();
-				*_begin = val;
+				*_M_begin = val;
 
 				for (auto it = begin() + 1; it != end(); ++it) {
 					std::swap(*it, prev);
@@ -198,10 +210,10 @@ namespace wsy
 			if (empty()) return;
 			else if (2 * size() <= capacity())
 			{
-				//shrink _cend to be half
-				//shrink _end by 1
+				//shrink _M_end_of_storage to be half
+				//shrink _M_end by 1
 
-				auto tmp_begin = alloc.allocate(size());
+				auto tmp_begin = _M_allocator.allocate(size());
 				auto tmp_end = std::uninitialized_copy(begin(), end() - 1, tmp_begin);
 				auto tmp_cend = tmp_begin + size();
 
@@ -209,7 +221,7 @@ namespace wsy
 			}
 			else
 			{
-				alloc.destroy(_end-- - 1);
+				_M_allocator.destroy(_M_end-- - 1);
 			}
 		}
 
@@ -224,8 +236,8 @@ namespace wsy
 					*it = *(it + 1);
 					++it;
 				}
-				alloc.destroy(it);
-				--_end;
+				_M_allocator.destroy(it);
+				--_M_end;
 			}
 			else
 			{
@@ -234,27 +246,31 @@ namespace wsy
 				//	*it = *(it + 1);
 				//	++it;
 				//}
-				//alloc.destroy(it);
-				//_end = it;
-				//alloc.deallocate(it, size_type(_M_getStorage() - end())); // <-- will not work
-				//_cend = _end;
+				//_M_allocator.destroy(it);
+				//_M_end = it;
+				//_M_allocator.deallocate(it, size_type(_M_getStorage() - end())); // <-- will not work
+				//_M_end_of_storage = _M_end;
 
-				auto tmp_begin = alloc.allocate(size() - 1);
+				auto tmp_begin = _M_allocator.allocate(size() - 1);
 				auto tmp_end = std::uninitialized_copy(begin() + 1, end(), tmp_begin);
 				auto tmp_cend = tmp_begin + size() - 1;
 				_M_alloc_refresh(tmp_begin, tmp_end, tmp_cend);
 			}
 		}
 
-		iterator begin() { return _begin; }
-		const_iterator begin() const { return _begin; }
-		iterator end() { return _end; }
-		const_iterator end() const { return _end; }
+		iterator begin() { return _M_begin; }
+		const_iterator begin() const { return _M_begin; }
+		const_iterator cbegin() const { return _M_begin; }
+		iterator end() { return _M_end; }
+		const_iterator end() const { return _M_end; }
+		const_iterator cend() const { return _M_end; }
 
 		reference front() { return *begin(); }
 		const_reference front() const { return *begin(); }
 		reference back() { return *(end() - 1); }
 		const_reference back() const { return *(end() - 1); }
+
+		void clear() { _M_dealloc(); }
 
 		iterator erase(iterator pos)
 		{
@@ -264,16 +280,16 @@ namespace wsy
 				*it = *(it + 1);
 				++it;
 			}
-			alloc.destroy(it);
-			--_end;
+			_M_allocator.destroy(it);
+			--_M_end;
 			return pos;
 		}
 		iterator erase(iterator it_begin, iterator it_end)
 		{
-			iterator it = std::copy(it_end, _end, it_begin);
-			while (it != _end)
-				alloc.destroy(it++);
-			_end = _end - (it_end - it_begin);
+			iterator it = std::copy(it_end, _M_end, it_begin);
+			while (it != _M_end)
+				_M_allocator.destroy(it++);
+			_M_end = _M_end - (it_end - it_begin);
 			return it_begin;
 		}
 		iterator insert(iterator pos, const_reference val)
@@ -289,7 +305,7 @@ namespace wsy
 			{
 				value_type prev = *--pos;
 				*pos = val;
-				while (pos != _end)
+				while (pos != _M_end)
 					std::swap(*pos++, prev);
 				push_back(prev);
 			}
@@ -306,13 +322,13 @@ namespace wsy
 			+-------------------------------------+------------------------------------------------------+
 			|senario 1:                           |                                                      |
 			|                                     | senario 2:                                           |
-			|   _end + (end - begin) < _cend      |                                                      |
-			|                                     |    _end + (end - begin) >= _cend                     |
+			|   _M_end + (end - begin) < _M_end_of_storage      |                                                      |
+			|                                     |    _M_end + (end - begin) >= _M_end_of_storage                     |
 			|                                     |                                                      |
 			|          |     |      |        |    |                                                      |
 			|          +-----+------+--------+    |     |     |      |        |                          |
-			|      _begin   pos  _end        _cend|     +-----+------+--------+                          |
-			|                                     | _begin   pos  _end        _cend                      |
+			|      _M_begin   pos  _M_end        _M_end_of_storage|     +-----+------+--------+                          |
+			|                                     | _M_begin   pos  _M_end        _M_end_of_storage                      |
 			|                                     |                                                      |
 			|                |    |               |                                                      |
 			|                +----+               |           |            |                             |
@@ -320,13 +336,13 @@ namespace wsy
 			|                                     |        begin           end                           |
 			|          |     |    | |    |   |    |                                                      |
 			|          +-----+----+-+----+---+    | new allocation: double storage                       |
-			|      _begin   pos         _end _cend|                                                      |
+			|      _M_begin   pos         _M_end _M_end_of_storage|                                                      |
 			|                                     |     |                     |                     |    |
 			|                                     |     +---------------------+---------------------+    |
 			|                                     |                                                      |
 			|                                     |     |     |            |                        |    |
 			|                                     |     +-----+------------+------------------------+    |
-			|                                     |  _begin  pos          _end                      _cend|
+			|                                     |  _M_begin  pos          _M_end                      _M_end_of_storage|
 			|                                     |                                                      |
 			|                                     |        |        |                  |                 |
 			|                                     |        |        |                  |                 |
@@ -341,7 +357,7 @@ namespace wsy
 			if ((it_end - it_begin + end()) >= _M_getStorage())
 			{
 				size_type new_size = 2 * (size_type(it_end - it_begin) + size());
-				auto tmp_begin = alloc.allocate(new_size);
+				auto tmp_begin = _M_allocator.allocate(new_size);
 
 				if (pos == end())
 				{
@@ -362,13 +378,13 @@ namespace wsy
 			else
 			{ // senario 1
 				if (pos == end())
-					_end = std::uninitialized_copy(it_begin, it_end, end());
+					_M_end = std::uninitialized_copy(it_begin, it_end, end());
 				else
 				{
 					vector tmp(size_type(end() - pos));
 					std::copy(pos, end(), tmp.begin());
 
-					_end = std::uninitialized_fill_n(end(), size_type(it_end - it_begin), value_type{});
+					_M_end = std::uninitialized_fill_n(end(), size_type(it_end - it_begin), value_type{});
 					std::copy(it_begin, it_end, pos);
 					std::copy(tmp.begin(), tmp.end(), pos + size_type(it_end - it_begin));
 				}
@@ -376,40 +392,40 @@ namespace wsy
 			return begin() + offset;
 		}
 
-		size_type capacity() const { return size_type(_cend - _begin); }
-		size_type size() const { return size_type(_end - _begin); }
+		size_type capacity() const { return size_type(_M_end_of_storage - _M_begin); }
+		size_type size() const { return size_type(_M_end - _M_begin); }
 
 		void print() const
 		{
-			for (auto it = _begin; it != _end; ++it)
+			for (auto it = _M_begin; it != _M_end; ++it)
 				std::cout << *it << " ";
 			std::cout << std::endl;;
 		}
 
-		bool empty() const { return _begin == _end; }
+		bool empty() const { return _M_begin == _M_end; }
 
 		~vector() { _M_dealloc(); }
 
 	private:
-		iterator _begin;
-		iterator _end;
-		iterator _cend;
+		iterator _M_begin;
+		iterator _M_end;
+		iterator _M_end_of_storage;
 
-		Alloc alloc;
+		Alloc _M_allocator;
 
-		iterator _M_getStorage() { return _cend; }
+		iterator _M_getStorage() { return _M_end_of_storage; }
 
 		void _M_alloc_refresh(iterator it_begin, iterator it_end, iterator cend)
 		{
 			_M_dealloc();
-			_begin = it_begin;
-			_end = it_end;
-			_cend = cend;
+			_M_begin = it_begin;
+			_M_end = it_end;
+			_M_end_of_storage = cend;
 		}
 
 		void _M_realloc_copy(const_iterator it_begin, const_iterator it_end)
 		{
-			auto tmp_begin = alloc.allocate(size_type(it_end - it_begin));
+			auto tmp_begin = _M_allocator.allocate(size_type(it_end - it_begin));
 			auto tmp_end = std::uninitialized_copy(it_begin, it_end, tmp_begin);
 			auto tmp_cend = tmp_begin + size_type(it_end - it_begin);
 			_M_alloc_refresh(tmp_begin, tmp_end, tmp_cend);
@@ -417,7 +433,7 @@ namespace wsy
 
 		void _M_realloc_fill(size_type size, const_reference val = value_type{})
 		{
-			auto tmp_begin = alloc.allocate(size);
+			auto tmp_begin = _M_allocator.allocate(size);
 			auto tmp_end = std::uninitialized_fill_n(tmp_begin, size, val);
 			auto tmp_cend = tmp_begin + size;
 			_M_alloc_refresh(tmp_begin, tmp_end, tmp_cend);
@@ -425,13 +441,14 @@ namespace wsy
 
 		void _M_dealloc()
 		{
-			auto p = _begin;
-			while (p != _end)
-				alloc.destroy(p++);
-			alloc.deallocate(_begin, capacity());
-			_begin = nullptr;
-			_end = _begin;
-			_cend = _end;
+			if (empty()) return;
+			auto p = _M_begin;
+			while (p != _M_end)
+				_M_allocator.destroy(p++);
+			_M_allocator.deallocate(_M_begin, capacity());
+			_M_begin = nullptr;
+			_M_end = _M_begin;
+			_M_end_of_storage = _M_end;
 		}
 	};
 
@@ -450,6 +467,17 @@ namespace wsy
 		for (auto it1 = v1.begin(), it2 = v2.begin(); it1 != v1.end() && it2 != v2.end(); ++it1, ++it2)
 			if (*it1 != *it2) return false;
 		return true;
+	}
+
+	template <typename T>
+	inline bool operator!=(const vector<T> & v1, const vector<T> & v2)
+	{
+		return !(v1 == v2);
+	}
+
+	template <typename T>
+	inline void swap(vector<T>& v1, vector<T>& v2) {
+		v1.swap(v2);
 	}
 
 	/*template <typename T>
